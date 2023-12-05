@@ -23,23 +23,8 @@ namespace endpoint {
 class endpoint::endpoint_interface {
 public:
     using address_t = struct ::sockaddr;
-
-    constexpr endpoint_interface() noexcept : identifier {-1} {}
-    
-    explicit constexpr endpoint_interface(int id)
-    {
-	if (id < 0)
-	    throw std::runtime_error {::strerrorname_np(errno)};
-
-	identifier = id;
-    }
     
     endpoint_interface(const endpoint_interface&) = delete;
-    
-    constexpr endpoint_interface(endpoint_interface&& endpoint) noexcept
-    {
-	endpoint_interface::operator=(std::move(endpoint));
-    }
 
     endpoint_interface& operator=(const endpoint_interface&) = delete;
 
@@ -62,8 +47,7 @@ public:
     virtual void connect() = 0;
     
     virtual const address_t* address() const noexcept = 0;
-    
-    
+        
     void listen(int backlog) const
     {
 	if (::listen(identifier, backlog) == -1)
@@ -80,12 +64,41 @@ public:
 	}
     }
 
-    constexpr int fd() const noexcept
+    constexpr int id() const noexcept
     {
 	return identifier;
     }
-    
+
+    constexpr int liberation() noexcept
+    {
+	int retfd = -1;
+
+	if (identifier >= 0) {
+	    retfd      = identifier;
+	    identifier = -1;
+	}
+
+	return retfd;
+    }
+
 protected:
+    constexpr endpoint_interface() noexcept : identifier {-1} {}
+    
+    explicit constexpr endpoint_interface(int id)
+    {
+	// TODO(#2): add a file descriptor check for socket type
+	
+	if (id < 0)
+	    throw std::runtime_error {::strerrorname_np(errno)};
+
+	identifier = id;
+    }
+    
+    constexpr endpoint_interface(endpoint_interface&& endpoint) noexcept
+    {
+	endpoint_interface::operator=(std::move(endpoint));
+    }
+    
     void create(int domain, int type, int protocol)
     {
 	close();
@@ -118,31 +131,7 @@ class endpoint::net_endpoint : public endpoint::endpoint_interface {
 public:
     using address_t = struct ::sockaddr_in;
 
-    constexpr net_endpoint() noexcept : endpoint_interface() {}
-    
-    explicit constexpr net_endpoint(int id) : endpoint_interface(id) {}
-
-    net_endpoint(int id, std::string_view sp, uint16_t port) : endpoint_interface(id)
-    {
-	address_t taddr;
-	
-	::memset(&taddr, 0, sizeof(taddr));
-	
-	taddr.sin_family = AF_INET;
-	taddr.sin_port   = ::htons(port);
-	
-	if (::inet_aton(sp.data(), &taddr.sin_addr) == 0)
-	    throw std::runtime_error {"Invalid IPv4 address format"};
-
-	::memcpy(&addr, &taddr, sizeof(addr));
-    }
-
     net_endpoint(const net_endpoint&) = delete;
-
-    constexpr net_endpoint(net_endpoint&& endpoint) noexcept
-    {
-	net_endpoint::operator=(std::move(endpoint));
-    }
 
     net_endpoint& operator=(const net_endpoint&) = delete;
 
@@ -180,6 +169,32 @@ public:
     {	
 	return reinterpret_cast<const endpoint_interface::address_t*>(&addr);
     }
+
+protected:
+    constexpr net_endpoint() noexcept : endpoint_interface()
+    {
+	::memset(&addr, 0, sizeof(addr));
+    }
+
+    net_endpoint(int id, std::string_view sp, uint16_t port) : endpoint_interface(id)
+    {
+	address_t taddr;
+	
+	::memset(&taddr, 0, sizeof(taddr));
+	
+	taddr.sin_family = AF_INET;
+	taddr.sin_port   = ::htons(port);
+	
+	if (::inet_aton(sp.data(), &taddr.sin_addr) == 0)
+	    throw std::runtime_error {"Invalid IPv4 address format"};
+
+	::memcpy(&addr, &taddr, sizeof(addr));
+    }
+
+    constexpr net_endpoint(net_endpoint&& endpoint) noexcept
+    {
+	net_endpoint::operator=(std::move(endpoint));
+    }
     
 private:
     address_t addr;
@@ -190,11 +205,13 @@ public:
     using address_t = net_endpoint::address_t;
 
     constexpr tcp_endpoint() noexcept : net_endpoint() {}
-    
-    explicit constexpr tcp_endpoint(int id) noexcept : net_endpoint(id) {}
 
     tcp_endpoint(std::string_view sp, uint16_t port) :
 	net_endpoint(::socket(AF_INET, SOCK_STREAM, 0), sp, port)
+    {}
+
+    tcp_endpoint(int id, std::string_view sp, uint16_t port) :
+	net_endpoint(id, sp, port)
     {}
 	
     tcp_endpoint(const tcp_endpoint&) = delete;
